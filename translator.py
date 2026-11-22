@@ -1,48 +1,89 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
 import threading
-import time
-from deep_translator import GoogleTranslator, MyMemoryTranslator
+import json
+import urllib.request
+import urllib.parse
 
-# Language name -> (Google code, MyMemory name)
+# Language name -> code
 LANGUAGES = {
-    "English": ("en", "english"),
-    "Urdu": ("ur", "urdu"),
-    "Hindi": ("hi", "hindi"),
-    "Arabic": ("ar", "arabic"),
-    "French": ("fr", "french"),
-    "German": ("de", "german"),
-    "Spanish": ("es", "spanish"),
-    "Chinese": ("zh-CN", "chinese simplified"),
+    "English": "en",
+    "Urdu": "ur",
+    "Hindi": "hi",
+    "Arabic": "ar",
+    "French": "fr",
+    "German": "de",
+    "Spanish": "es",
+    "Chinese": "zh-CN",
 }
+
+NON_LATIN = ("Urdu", "Hindi", "Arabic", "Chinese")
+HEADERS = {"User-Agent": "Mozilla/5.0"}
+
+
+def fetch_json(url):
+    req = urllib.request.Request(url, headers=HEADERS)
+    with urllib.request.urlopen(req, timeout=8) as r:
+        return json.loads(r.read().decode("utf-8"))
+
+def google_gtx(text, src, tgt):
+    q = urllib.parse.quote(text)
+    url = ("https://translate.googleapis.com/translate_a/single"
+           f"?client=gtx&sl={src}&tl={tgt}&dt=t&q={q}")
+    data = fetch_json(url)
+    return "".join(part[0] for part in data[0] if part[0])
+
+
+def lingva(text, src, tgt, host):
+    q = urllib.parse.quote(text, safe="")
+    data = fetch_json(f"https://{host}/api/v1/{src}/{tgt}/{q}")
+    return data["translation"]
+
+
+def lingva_1(text, src, tgt):
+    return lingva(text, src, tgt, "lingva.ml")
+
+
+def lingva_2(text, src, tgt):
+    return lingva(text, src, tgt, "lingva.lunar.icu")
+
+
+def mymemory(text, src, tgt):
+    q = urllib.parse.quote(text)
+    url = f"https://api.mymemory.translated.net/get?q={q}&langpair={src}|{tgt}"
+    data = fetch_json(url)
+    return data["responseData"]["translatedText"]
+
+
+SERVICES = [google_gtx, lingva_1, lingva_2, mymemory]
+
+
+def is_valid(result, text, tgt_name):
+    if not result or not result.strip():
+        return False
+    if result.strip().lower() == text.strip().lower():
+        return False
+    if "MYMEMORY WARNING" in result.upper():
+        return False
+    if tgt_name in NON_LATIN and result.isascii():
+        return False
+    return True
 
 
 def do_translation(text, src_name, tgt_name):
-    src_g, src_m = LANGUAGES[src_name]
-    tgt_g, tgt_m = LANGUAGES[tgt_name]
-
-    # Google: 3 attempts with waiting
-    for _ in range(3):
+    src, tgt = LANGUAGES[src_name], LANGUAGES[tgt_name]
+    for service in SERVICES:
         try:
-            result = GoogleTranslator(source=src_g, target=tgt_g).translate(text)
-            if result:
+            result = service(text, src, tgt)
+            if is_valid(result, text, tgt_name):
                 return result
         except Exception:
-            time.sleep(3)
-
-    # Backup translator
-    result = MyMemoryTranslator(source=src_m, target=tgt_m).translate(text)
-    non_latin = tgt_name in ("Urdu", "Hindi", "Arabic", "Chinese")
-    bad = (
-        not result
-        or result.strip().lower() == text.strip().lower()
-        or (non_latin and result.isascii())
-    )
-    if bad:
-        raise Exception("Google is busy. Wait 2 minutes and try again.")
-    return result
+            continue  # try the next service
+    raise Exception("All translation services are busy or offline.\n"
+                    "Check your internet and try again in a minute.")
 
 
+# ---------- UI logic ----------
 def set_output(text):
     output_box.config(state="normal")
     output_box.delete("1.0", tk.END)
@@ -53,19 +94,16 @@ def set_output(text):
 def worker(text, src_name, tgt_name):
     try:
         result = do_translation(text, src_name, tgt_name)
-        root.after(0, lambda: finish(result, None))
+        root.after(0, finish, result, None)
     except Exception as e:
-        root.after(0, lambda: finish(None, e))
+        root.after(0, finish, None, str(e))
 
 
 def finish(result, error):
     translate_btn.config(state="normal")
     if error:
         status_var.set("Failed")
-        messagebox.showerror(
-            "Error",
-            "Translation failed. Check your internet and try again.\n\n" + str(error),
-        )
+        messagebox.showerror("Error", error)
     else:
         set_output(result)
         status_var.set("Done")
