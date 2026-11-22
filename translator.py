@@ -18,17 +18,29 @@ LANGUAGES = {
 
 
 def do_translation(text, src_name, tgt_name):
-    """Try Google (2 attempts), then fall back to MyMemory."""
     src_g, src_m = LANGUAGES[src_name]
     tgt_g, tgt_m = LANGUAGES[tgt_name]
 
-    for _ in range(2):
+    # Google: 3 attempts with waiting
+    for _ in range(3):
         try:
-            return GoogleTranslator(source=src_g, target=tgt_g).translate(text)
+            result = GoogleTranslator(source=src_g, target=tgt_g).translate(text)
+            if result:
+                return result
         except Exception:
-            time.sleep(1.5)
+            time.sleep(3)
 
-    return MyMemoryTranslator(source=src_m, target=tgt_m).translate(text)
+    # Backup translator
+    result = MyMemoryTranslator(source=src_m, target=tgt_m).translate(text)
+    non_latin = tgt_name in ("Urdu", "Hindi", "Arabic", "Chinese")
+    bad = (
+        not result
+        or result.strip().lower() == text.strip().lower()
+        or (non_latin and result.isascii())
+    )
+    if bad:
+        raise Exception("Google is busy. Wait 2 minutes and try again.")
+    return result
 
 
 def set_output(text):
